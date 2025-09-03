@@ -29,7 +29,9 @@ library(fpp3)
 ⌘ + ⌥ + I
 
 ```{r}
-medicinas <- read_csv('datos/medicinas.csv')
+library(here)
+medicinas <- read.csv(here("datos", "medicinas.csv"))
+#medicinas <- read_csv("datos/medicinas.csv") **No encontraba la ruta
 medicinas
 ```
 
@@ -57,5 +59,63 @@ medicinas |>
 ```
 
 ```{r}
+#| warning: false
 
+medicinas_dcmp <- medicinas |> 
+  model(dcmp_clasica_mult = classical_decomposition(Cost, type='multiplicative'),
+        dcmp_clasica_add = classical_decomposition(Cost, type='additive')) |> 
+  components() 
+
+medicinas_dcmp
+
+medicinas_dcmp |> 
+  ggplot(aes(y=Cost, x=fecha)) +
+  geom_line(color='grey') +
+  geom_line(aes(y = season_adjust), color = 'blue')
+
+medicinas_dcmp |> 
+  autoplot()
+```
+
+## Descomposición STL
+
+```{r}
+
+medicinas |> 
+  autoplot(Cost)
+
+medicinas |> 
+  autoplot(log(Cost))
+
+lambda_med <- medicinas |> 
+  features(Cost, features = guerrero) |> 
+  pull()
+
+medicinas |> 
+  autoplot(box_cox(Cost, lambda = lambda_med))
+```
+
+```{r}
+medicinas_stl <- medicinas |>
+  model(stl = STL(log(Cost) ~ trend(window = NULL) + season(window = "periodic"), robust = TRUE)) |>
+  components()
+
+medicinas_stl |> 
+  autoplot()
+```
+
+Vamos a modificar manualmente un valor para convertirlo en outlier y ver cómo afecta a la descomposición:
+
+```{r}
+medicinas_mod <- medicinas
+
+medicinas_mod$Cost[50] <- 3
+
+medicinas_mod |> 
+  autoplot(Cost)
+
+medicinas_mod |> 
+  model(stl = STL(log(Cost) ~ season(window = "periodic"), robust = TRUE)) |> 
+  components() |> 
+  autoplot()
 ```
