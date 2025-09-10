@@ -4,23 +4,118 @@ format: html
 editor: visual
 ---
 
-## Quarto
-
-Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
-
-## Running Code
-
-When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
+## Forecasts
 
 ```{r}
-1 + 1
+library(tidyverse)
+library(fpp3)
 ```
 
-You can add options to executable code like this
+Let's review this time series for Australian production. You can see that the gas production doesn't have constant variance and needs a mathematical transformation to stabilize it.
+
+Assuming we'll make a forecast for 3 years of Aus production, let's separate our data in train and test.
 
 ```{r}
-#| echo: false
-2 * 2
+gas_train <- aus_production |> 
+  filter_index(. ~ "2007 Q2")
 ```
 
-The `echo: false` option disables the printing of code (only output is displayed).
+Now let's visualize the time series:
+
+```{r}
+gas_test <- 
+```
+
+```{r}
+gas_train |> 
+  autoplot(Gas)
+```
+
+Lets use box-cox with Guerrero feature and see the changes.
+
+```{r}
+gas_lambda <- gas_train |> 
+  features(Gas, features= guerrero) |> 
+  pull()
+
+gas_lambda
+```
+
+```{r}
+gas_train |> 
+  autoplot(box_cox(Gas, gas_lambda))
+```
+
+**¿Which forecast method is the most appropriate for this time series?**
+
+Note that all the mathematical transformations have to be done inside the fitting function, not before.
+
+```{r}
+#tabla con los modelos ajustados
+gas_fit <- gas_train |> 
+  model(
+    drift = RW(box_cox(Gas, gas_lambda) ~ drift()),
+    snaive = SNAIVE(box_cox(Gas, gas_lambda)),
+    media = MEAN(box_cox(Gas, gas_lambda))
+  )
+
+gas_fit
+
+```
+
+Lets make a diagnosis of the models residuals. The function `augment()`, it allows us to obtain the residuals and other adjusted values of the models.
+
+```{r}
+gas_aug <- gas_fit |> 
+  augment()
+
+gas_aug
+```
+
+### **Residual Diagnosis**
+
+A good forecast model will produce residuals with the following characteristics:
+
+1.  **Residuals are not autocorrelated**: if correlations are detected between residuals, there's still useful information yet to be modeled.
+2.  **The residuals average is zero:** If the average is different than zero, then the forecast is biased.
+
+Additional to this, the following characteristics are useful, not determinant:
+
+3.  The residuals have a constant variance
+4.  The residuals are *normally* distributed
+
+Gráfica de los residuos de los modelos:
+
+```{r}
+gas_aug |> 
+  autoplot(.innov) +
+  facet_wrap(~.model, ncol=1, scales = "free_y")
+```
+
+Gráfica edel ACF del residuo de los modelos:
+
+```{r}
+gas_aug |> 
+  ACF(.innov) |> 
+  autoplot(.innov) +
+  facet_wrap(~.model, ncol=1, scales="free_y")
+  
+  
+```
+
+Gráfica del histograma de los residuos
+
+```{r}
+gas_aug |> 
+  ggplot(aes(x = .innov, fill = .model)) +
+  geom_histogram() +
+  facet_wrap(~.model, ncol=1, scales = "free_y")
+```
+
+Otra opción
+
+```{r}
+gas_fit |> 
+  select(drift) |> 
+  gg_tsresiduals()
+```
