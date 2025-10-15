@@ -1,0 +1,203 @@
+---
+title: "arima"
+format: 
+  html:
+    embed-resources: true
+editor: visual
+---
+
+## Ejercicio Arima
+
+```{r}
+library(tidyverse)
+library(fpp3)
+library(tidyquant)
+library(plotly)
+library(ggplot2)
+```
+
+```{r}
+mex <-global_economy |> 
+  filter(Country == "Mexico")
+
+mex |> 
+  autoplot(GDP)
+```
+
+### Verificar si la serie es estacionaria
+
+```{r}
+mex |> 
+  features(log(GDP), unitroot_ndiffs)
+```
+
+```{r}
+#| warning: false
+
+mex |> 
+  autoplot(log(GDP) |> difference())
+
+mex |> 
+  features(log(GDP) |> difference(), unitroot_kpss)
+```
+
+```{r}
+alpha <- 0.05
+
+0.1 < alpha #rechazar hipótesis nula si true
+```
+
+No se rechaza la $H_0$, podemos asumir que es estacionaria.
+
+### Gráficos ACF & PACF
+
+```{r}
+#| warning: false
+
+mex |> 
+  gg_tsdisplay(log(GDP) |> difference(), plot_type = 'partial')
+```
+
+Se muestran picos negativos significativos en el rezago 1 en ambos gráficos. Se sugiere un **ARIMA(0,1,1)** porque la serie diferenciada ya es estacionaria y la ACF muestra un corte claro en el rezago 1, mientras que la PACF se desvanece gradualmente, patrón típico de un proceso MA(1).
+
+## Modelos Arima
+
+La diferenciación debe ser la misma para que con criterios de información puedan ser comparables los modelos. Si solo se usan las mayúsculas `PDQ(0,0,0)`, R va seleccionar el modelo que mejor se ajuste (AutoArima).
+
+```{r}
+
+gdp_fit <- mex |>
+  model(
+    arima_011 = ARIMA(log(GDP) ~ pdq(0,1,1) + PDQ(0,0,0)),
+    arima_111 = ARIMA(log(GDP) ~ pdq(1,1,1) + PDQ(0,0,0)),
+    arima_112 = ARIMA(log(GDP) ~ pdq(1,1,2) + PDQ(0,0,0)),
+    arima_210 = ARIMA(log(GDP) ~ pdq(2,1,0) + PDQ(0,0,0)),
+    arima_310 = ARIMA(log(GDP) ~ pdq(3,1,0) + PDQ(0,0,0)),
+    semi_auto = ARIMA(log(GDP) ~ pdq(p = 0:3, d = 1) + PDQ(0,0,0)),
+    auto_arima = ARIMA(log(GDP) ~ PDQ(0,0,0))
+                    
+  )
+
+gdp_fit |> glance() |> 
+  arrange(AICc)
+
+gdp_fit |> 
+  accuracy()
+```
+
+```{r}
+gdp_fit |> 
+  select(arima_210) |>
+  report()
+```
+
+```{r}
+gdp_fit |> 
+  select(arima_111) |>
+  report()
+```
+
+```{r}
+gdp_fit |> 
+  select(arima_011) |>
+  report()
+```
+
+```{r}
+gdp_fit |> 
+  select(auto_arima) |>
+  report()
+
+
+```
+
+```{r}
+gdp_fit |> 
+  select(semi_auto) |>
+  report()
+```
+
+De acuerdo con los criterios de información $AIC_c$ y $BIC$ el mejor modelo es el `arima_210` es el óptimo para este modelo, sin embargo la métrica $MAE$ sugiere que el mejor modelo es el `arima_111` y el RMSE el `arima_011`, esto indica que estos modelos también son competitivos por su precisión.
+
+# Modelos SARIMA
+
+ARIMA model including seasonality: $(P,D,Q)_m$ where `m` is the seasonal period. Where $(p,q,d)$ is the not seasonal part of the model.
+
+p: PACF
+
+d: `unitroot_ndiffs`
+
+q: ACF
+
+P: PACF
+
+Q: `unitroot_nsdiffs`
+
+D: ACF (seasonal lags)
+
+```{r}
+ h02 <- PBS |> 
+   filter(ATC2 == "H02") |> 
+   summarise(Cost = sum(Cost)/1e6)
+ 
+ h02_train = h02 |> 
+   filter_index(. ~ "2004 Jun.")
+ 
+ h02 |> 
+   autoplot(Cost)
+```
+
+Se requiere estabilizar la varianza, se probará con logaritmos:
+
+```{r}
+h02 |> 
+   autoplot(log(Cost))
+```
+
+Ahora falta estabilizar la media para hacer la serie estacionaria:
+
+```{r}
+h02 |> 
+  features(log(Cost), unitroot_nsdiffs)
+```
+
+Aplicando las diferencias estacionales:
+
+```{r}
+#| warning: false
+
+h02 |> 
+  autoplot(log(Cost) |> difference(lag = 12)) #la serie es mensual, m=12
+```
+
+```{r}
+h02 |> 
+  features(log(Cost) |> difference(lag = 12), unitroot_ndiffs)
+```
+
+La serie además de la diferencia estacional, necesita 1 diferencia no estacional.
+
+```{r}
+#| warning: false
+
+h02 |> 
+  gg_tsdisplay(log(Cost) |> difference(lag = 12) |> difference(), plot_type = "partial", lag_max = 48)
+```
+
+p: 2 (pico en PACF)
+
+d: 1
+
+q: {1,2}
+
+P: 1 (primer rezago estacional, 12 es el único significativo)
+
+Q: 1
+
+D: {2, 3}
+
+Como m es 12, los periodos significativos se revisan cada 12
+
+### Ejercicio
+
+Pronóstico a 4 años usando SARIMA. Se busca el menor MAPE de pronóstico

@@ -1,0 +1,247 @@
+---
+title: "Descargar datos de internet con tidyquant"
+format: 
+  html:
+    embed-resources: true
+editor: visual
+---
+
+## Data download with tidyquant
+
+**Ana Luisa Espinoza López**
+
+Utilizaremos la función `tq_get()`
+
+```{r}
+library(tidyverse)
+library(fpp3)
+library(tidyquant)
+library(plotly)
+library(ggplot2)
+```
+
+You can add options to executable code like this
+
+```{r}
+tq_get_options()
+```
+
+```{r}
+exports <- tq_get(
+  x = "EXPMX",              #<1>
+  get = "economic.data",    #<2>
+  from = "1985-01-01",      #<3>
+  to = "2025-07-01"         #<4>
+)
+
+exports 
+```
+
+1.  El símbolo del dato económico que queremos descargar
+2.  El tipo de dato y fuente de donde queremos descargarlos, en este caso, datos económicos del **FRED**
+3.  Fecha de inicio de los datos aaaa-mm-dd
+4.  Fecha final
+
+La \`tibble\` resultante tenemos que convertirla a `tsibble` y asegurarnos que la variable de fecha tiene el formato correcto
+
+```{r}
+exports <- exports |> 
+  mutate(date = yearmonth(date)) |> 
+  as_tsibble(index = date)
+
+exports
+```
+
+1.  Convertiremos la variable al formato `` `yearmonth` ``
+2.  Convertimos la `tibble` a `tsibble`, indicando que la variable de la fecha es `date`.
+
+# EDA
+
+```{r}
+exports |> 
+  autoplot(price)
+```
+
+## Ejercicio
+
+1.  Realizar un pronóstico a dos años para la serie
+2.  Entregar un informe en Quarto con el análisis y el pronóstico
+3.  La métrica de error a utilizar para calcular la precisión del pronóstico será el MAE
+4.  Entrega: 19-sep
+
+**Separar Train**
+
+```{r}
+exp_train <- exports |> 
+  filter_index(. ~ "2021 Jul")
+
+exp_train
+```
+
+```{r}
+exp_train |> 
+  autoplot(price)
+```
+
+```{r}
+exp_train |> 
+  model(stl = STL(price, robust = TRUE)) |> 
+  components() |> 
+  autoplot() 
+
+```
+
+```{r}
+exp_train |> 
+  autoplot(log(price))
+```
+
+Ahora definimos el test:
+
+```{r}
+exp_test <- exports |> 
+  filter_index("2021 Aug" ~ "2023 Jul")
+```
+
+Y el validate:
+
+```{r}
+exp_trainfull <- exports |> 
+  filter_index(. ~ "2023 Jul")
+
+exp_val <- exports |> 
+  filter_index("2023 Aug" ~ "2025 Jul")
+```
+
+#### Entrenamiento de modelos
+
+Se calculará el lambda óptimo para box cox con el feature de Guerrero para buscar estabilizar la varianza.
+
+```{r}
+
+exp_lambda <- exp_train |> 
+  features(price, features= guerrero) |> 
+  pull()
+
+exp_lambda
+```
+
+```{r}
+
+exp_lambda
+```
+
+En la siguiente sección, se definiran los potenciales modelos para la serie. Se considera que al notar diversos outliers y varianza creciente se utilizará el trend y season multiplicativo.
+
+```{r}
+
+modelos <- exp_train |> 
+  model(
+    STL = decomposition_model(
+      STL(box_cox(price, exp_lambda) ~ season(window = "periodic")), 
+      ETS(season_adjust)
+    ),
+    Drift = RW(box_cox(price, exp_lambda) ~ drift()),
+    ETS = ETS(box_cox(price, exp_lambda)),
+    Holt = ETS(price ~ trend("M") + season("M")),
+    Damped = ETS(price ~ trend("M", phi = 0.85) + season("M")),
+    HW = ETS(price ~ error("M") + trend("M") + season("M")),
+    exp_dcmp = decomposition_model(
+      STL(box_cox(price, exp_lambda) ~ season(window = "periodic"), robust = TRUE),
+      RW(season_adjust ~ drift()),
+      SNAIVE(season_year)
+    ),
+    stlf = decomposition_model(
+      STL(log(price) ~ season(window = "periodic"), robust=TRUE), 
+      RW(season_adjust ~ drift())
+    )
+  )
+```
+
+#### Forecast 2 años
+
+```{r}
+# Forecast 24 meses
+fc <- modelos |> 
+  forecast(h = "2 years")
+```
+
+```{r}
+# Comparar con el test usando MAE
+fc |> 
+  accuracy(exp_test) |> 
+  arrange(MAE)
+```
+
+```{r}
+# Graficar forecast vs test
+# Gráfico interactivo usando ggplotly
+p <- fc |> 
+  autoplot(exp_test, level = NULL) +  # level = NULL quita intervalos de confianza
+  autolayer(exp_test, price) +
+  labs(title = "Forecast vs Real", y = "Price")
+
+plotly::ggplotly(p)
+```
+
+Se tomó como base el modelo ETS, el cual obtuvo el menor MAE de los modelos propuestos y sobre el se busca añadir elementos al modelo que puedan mejorar el performance del forecast.
+
+```{r}
+#| warning: false
+
+ETS_mod <- exp_train |> 
+  model(
+    ets = ETS(box_cox(price, exp_lambda)~ error("A") + trend("A", , phi = 0.75) + season("A"))
+  )
+
+
+```
+
+```{r}
+fc_ETS <- ETS_mod |> 
+  forecast(h = "2 years") 
+  
+
+fc_ETS |> 
+  autoplot(exp_test)
+```
+
+```{r}
+fc_ETS |> 
+  accuracy(exp_test) |> 
+  arrange(MAE)
+```
+
+```{r}
+ETS_mod |> 
+  gg_tsresiduals()
+```
+
+```{r}
+
+ets_mod <- exp_trainfull |> 
+  model(
+    mod_anaesp = ETS(box_cox(price, exp_lambda)~ error("A") + trend("A", , phi = 0.75) + season("A"))
+  )
+
+fc_ets <- ets_mod |> 
+  forecast(h = "2 years") 
+  
+combined <- bind_rows(exp_test, exp_val)
+fc_ets |> 
+  autoplot(exp_test)
+
+
+
+
+```
+
+```{r}
+save(fc_ets, file = "fc_AnaLuisa.RData")
+```
+
+**Análisis y Conclusión**
+
+Analizando las métricas de performance para los distintos modelos planteados para el forecast de la serie, el modelo con menor MAE fue el ETS, con un valor de 1488.526. El análisis de los residuos del modelo ETS, aplicado sobre la serie transformada con Box-Cox para estabilizar la varianza, muestra un buen ajuste a la serie histórica. La mayoría de los residuos oscilan cerca de cero, dentro de un rango aproximado de ±0.2, lo que indica ausencia de sesgo sistemático, y la autocorrelación no revela patrones significativos pendientes de capturar, sugiriendo que los errores se comportan como ruido blanco. La distribución de los residuos es simétrica y asemeja una distribución normal, con valores extremos limitados a eventos anómalos, siendo el más notable el desplome de 2020 por COVID.
+
+En conjunto, esto evidencia que el modelo ETS ("AAA") captura el movimiento de la tendencia y la estacionalidad a largo plazo, manejando de manera 'confiable' la dinámica histórica de la serie, aunque no puede anticipar shocks extraordinarios. Los errores pequeños y homogéneos fuera de los eventos extremos refuerzan su robustez y precisión en condiciones normales.

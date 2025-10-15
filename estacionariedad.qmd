@@ -1,0 +1,166 @@
+---
+title: "estacionariedad"
+format: 
+  html:
+    embed-resources: true
+editor: visual
+---
+
+## Quarto
+
+```{r}
+library(tidyverse)
+library(fpp3)
+library(tidyquant)
+library(plotly)
+library(ggplot2)
+```
+
+You can add options to executable code like this
+
+```{r}
+aus_production |> 
+  autoplot(Cement)
+```
+
+```{r}
+aus_production |> 
+  autoplot(log(Cement))
+```
+
+Se estabilizó la varianza con logaritmo pero falta estabilizar la media. Se utilizarán diferencias estacionales
+
+**Serie estacionaria con diferencias estacionales**
+
+```{r}
+aaus_production |> 
+  autoplot(
+    Cement |> log() |> difference(lag = 4)
+  )
+```
+
+Pruebas estadísticas para determinar si la serie tiene media constante.
+
+**Prueba de raíz unitaria: KPSS**
+
+$H_0$ : la serie es estacionaria
+
+$H_a :$ serie no estacionaria
+
+**Prueba KPSS para serie log(Cement) sin diferenciación**
+
+```{r}
+kpss <- aus_production |> 
+  features(log(Cement), unitroot_kpss)
+
+kpss
+```
+
+Nivel de significancia (tolerancia de error): $\alpha = 0.05$ . Estoy dispuesto a 5% probabilidad de error de un falso positivo (rechazar la hipótesis nula).
+
+```{r}
+alpha <- 0.05
+
+0.01 < alpha #rechazar hipótesis nula si true
+```
+
+La serie no es estacionaria.
+
+Vamos a comprobar si la serie diferenciada ya es estacionaria:
+
+```{r}
+aus_production |> 
+  features(log(Cement) |> difference(lag = 4), unitroot_kpss)
+```
+
+```{r}
+alpha <- 0.05
+
+0.1 < alpha #rechazar hipótesis nula si true
+```
+
+No se rechaza la $H_0$, podemos asumir que es estacionaria.
+
+R tiene una función `uniroot_ndiffs`
+
+```{r}
+aus_production |> 
+  features(log(Cement), unitroot_nsdiffs) #Cuantas veces tengo que diferenciar la serie "estacional" para hacer la serie estacionaria
+```
+
+La función `uniroot_nsdiffs`, te dice cuantas diferencias estacionales se deben hacer para convertir la serie a estacionaria. Para ver si además necesita diferencias no estacionales:
+
+```{r}
+aus_production |> 
+  features(log(Cement) |> difference(lag = 4), unitroot_ndiffs)
+```
+
+De igual modo, con la serie sin diferenciar estacionalmente, con la función ndiffs se puede notar que dice que con una diferenciación no estacional también aplica
+
+```{r}
+aus_production |> 
+  features(log(Cement), unitroot_ndiffs)
+```
+
+**Serie estacionaria con diferencias no estacionales**
+
+```{r}
+#| warning: false
+
+aus_production |> 
+  autoplot(log(Cement) |> difference())
+
+aus_production |> 
+  features(log(Cement) |> difference(), unitroot_kpss)
+```
+
+# Ejercicio
+
+```{r}
+mex <-global_economy |> 
+  filter(Country == "Mexico")
+
+mex |> 
+  autoplot(GDP)
+```
+
+```{r}
+mex
+```
+
+### Verificar si la serie es estacionaria
+
+```{r}
+mex |> 
+  features(log(GDP), unitroot_ndiffs)
+```
+
+```{r}
+#| warning: false
+
+mex |> 
+  autoplot(log(GDP) |> difference())
+
+mex |> 
+  features(log(GDP) |> difference(), unitroot_kpss)
+```
+
+```{r}
+alpha <- 0.05
+
+0.1 < alpha #rechazar hipótesis nula si true
+```
+
+No se rechaza la $H_0$, podemos asumir que es estacionaria.
+
+### Gráficos ACF & PACF
+
+```{r}
+#| warning: false
+
+mex |> 
+  gg_tsdisplay(log(GDP) |> difference(), plot_type = 'partial')
+
+```
+
+Se muestran picos negativos significativos en los rezagos 1 en ambos gráficos

@@ -1,0 +1,165 @@
+---
+title: "sarima"
+format: 
+  html:
+    embed-resources: true
+editor: visual
+---
+
+# Modelos SARIMA
+
+### Ejercicio
+
+Pronóstico a 4 años usando SARIMA. Se busca el menor MAPE de pronóstico
+
+ARIMA model including seasonality: $(P,D,Q)_m$ where `m` is the seasonal period. Where $(p,q,d)$ is the not seasonal part of the model.
+
+p: PACF
+
+d: `unitroot_ndiffs`
+
+q: ACF
+
+P: PACF
+
+Q: `unitroot_nsdiffs`
+
+D: ACF (seasonal lags)
+
+```{r}
+library(tidyverse)
+library(fpp3)
+library(tidyquant)
+library(plotly)
+library(ggplot2)
+```
+
+```{r}
+ h02 <- PBS |> 
+   filter(ATC2 == "H02") |> 
+   summarise(Cost = sum(Cost)/1e6)
+ 
+ h02_train = h02 |> 
+   filter_index(. ~ "2004 Jun.")
+ 
+ h02_train |> 
+   autoplot(Cost)
+```
+
+Se requiere estabilizar la varianza, se probará con logaritmos:
+
+```{r}
+h02_train |> 
+   autoplot(log(Cost))
+```
+
+Ahora falta estabilizar la media para hacer la serie estacionaria:
+
+```{r}
+h02_train |> 
+  features(log(Cost), unitroot_nsdiffs)
+```
+
+Aplicando las diferencias estacionales:
+
+```{r}
+#| warning: false
+
+h02_train |> 
+  autoplot(log(Cost) |> difference(lag = 12)) #la serie es mensual, m=12
+```
+
+```{r}
+h02_train |> 
+  features(log(Cost) |> difference(lag = 12), unitroot_ndiffs)
+```
+
+La serie además de la diferencia estacional, necesita 1 diferencia no estacional.
+
+```{r}
+#| warning: false
+
+h02_train |> 
+  gg_tsdisplay(log(Cost) |> difference(lag = 12) |> difference(), plot_type = "partial", lag_max = 48)
+```
+
+p: {1,2} (pico en rezago 1 PACF)
+
+d: 1
+
+q: {1 pico significativo en rezago 1 y otro en 2 pero el más significativo es 1
+
+P: 0 porque el primero no es significativo
+
+D: 1
+
+Q: 0 porque en el periodo 12 no hay un corte significativo
+
+Como m es 12, los periodos significativos se revisan cada 12
+
+Además del modelo logarítmico, se probará la transformación matemática con box-cox para ver si hay diferencias significativas en los modelos:
+
+```{r}
+h02_lambda <- h02_train |> 
+  features(Cost, features= guerrero) |> 
+  pull()
+
+h02_lambda
+```
+
+```{r}
+
+h02_fit <- h02_train |> 
+  model(
+    semi_auto_log = ARIMA(log(Cost) ~ pdq(p = 1:2,1,0:1) + PDQ(0,1,0)),
+    semi_auto_bx  = ARIMA(box_cox(Cost, h02_lambda) ~ pdq(p = 1:2,1,0:1) + PDQ(0,1,0)),
+    arima_log_1 = ARIMA(log(Cost) ~ pdq(p = 1,1,1) + PDQ(0,1,0)),
+    arima_bx_1  = ARIMA(box_cox(Cost, h02_lambda) ~ pdq(p = 1,1,1) + PDQ(0,1,0)),
+  )
+
+h02_fit |> glance() |> 
+  arrange(AICc)
+
+h02_fit |> 
+  accuracy() |> 
+  arrange(MAPE)
+
+```
+
+```{r}
+h02_forecasts <- h02_fit |> forecast(h = "4 years")
+
+p <- h02_forecasts |> autoplot(h02) +
+  labs(title = "SARIMA",
+       x = "Month", y = "Cost") +
+    theme_minimal()
+
+plotly::ggplotly(p)
+```
+
+```{r}
+h02_forecasts <- h02_fit |> forecast(h = "4 years")
+
+h02_forecasts |> autoplot(h02) +
+  labs(title = "SARIMA",
+       x = "Month", y = "log(Cost)") +
+    theme_minimal()
+
+```
+
+De acuerdo con las métricas el mejor modelo es `semi_auto_bx`:
+
+```{r}
+h02_forecasts |> 
+  filter(.model == "semi_auto_bx") |> 
+  autoplot()
+  
+```
+
+```{r}
+h02_fit |> 
+  select(semi_auto_bx) |>
+  report()
+```
+
+El modelo que muestra la mejor métrica de error es el `semi_auto_bx`, utilizando la transformación matemática de box-cox para estabilizar la varianza y un modelo $ARIMA(2,1,0)(0,1,0)_{12}$ . Con un MAPE de 4.412171% de error de pronóstico.

@@ -1,0 +1,275 @@
+---
+title: "pronóstico_arima"
+format: 
+  html:
+    embed-resources: true
+editor: visual
+---
+
+## Pronóstico & filtro ARIMA
+
+```{r}
+
+library(tidyverse)
+library(fpp3)
+```
+
+Preparar set de train
+
+```{r}
+# Preparar datos de entrenamiento hasta 2005 Q2
+gas_train <- aus_production |>
+  filter_index(. ~ "2005 Q2")
+
+```
+
+```{r}
+# Calcular lambda para transformación Box-Cox
+gas_lambda <- gas_train |>
+  features(Gas, features = guerrero) |>
+  pull()
+```
+
+```{r}
+# Visualizar serie original
+gas_train |>
+  autoplot(Gas) +
+  labs(title = "Serie de Producción de Gas (hasta 2005 Q2)")
+```
+
+```{r}
+# ============================================
+# MODELOS MEJORADOS
+# ============================================
+
+gas_fit_mejorado <- gas_train |>
+  model(
+    # Modelos básicos para comparación
+    snaive = SNAIVE(box_cox(Gas, gas_lambda)),
+    drift = RW(box_cox(Gas, gas_lambda) ~ drift()),
+    
+    # ETS automático (encuentra el mejor modelo)
+    ets_auto = ETS(box_cox(Gas, gas_lambda)),
+    
+    # ETS específicos
+    ets_aaa = ETS(box_cox(Gas, gas_lambda) ~ error("A") + trend("A") + season("A")),
+    ets_ada = ETS(box_cox(Gas, gas_lambda) ~ error("A") + trend("Ad") + season("A")),
+    ets_mam = ETS(Gas ~ error("M") + trend("A") + season("M")),
+    ets_mad = ETS(Gas ~ error("M") + trend("Ad") + season("M")),
+    
+    # ARIMA automático
+    arima_auto = ARIMA(box_cox(Gas, gas_lambda)),
+    
+    # ARIMA manual con estacionalidad
+    arima_manual = ARIMA(box_cox(Gas, gas_lambda) ~ pdq(1,1,1) + PDQ(1,1,1)),
+    
+    # Descomposición STL con ETS
+    stl_ets = decomposition_model(
+      STL(box_cox(Gas, gas_lambda) ~ season(window = "periodic"), robust = TRUE),
+      ETS(season_adjust ~ error("A") + trend("Ad") + season("N"))
+    ),
+    
+    # Descomposición STL con ARIMA
+    stl_arima = decomposition_model(
+      STL(box_cox(Gas, gas_lambda) ~ season(window = "periodic"), robust = TRUE),
+      ARIMA(season_adjust)
+    )
+  )
+```
+
+Mostrar Resumen de Modelos mejorados
+
+```{r}
+# Mostrar resumen de modelos
+print(gas_fit_mejorado)
+```
+
+Diagnóstico de Residuales
+
+```{r}
+cat("\n\nREALIZANDO DIAGNÓSTICO DE LOS MODELOS PRINCIPALES...\n")
+
+# ETS automático
+cat("\n", strrep("=", 60), "\n")
+cat("DIAGNÓSTICO: ETS Automático\n")
+cat(strrep("=", 60), "\n\n")
+print(report(gas_fit_mejorado |> select(ets_auto)))
+gas_fit_mejorado |> 
+  select(ets_auto) |>
+  gg_tsresiduals()
+```
+
+```{r}
+lb_test_ets <- gas_fit_mejorado |>
+  select(ets_auto) |>
+  augment() |>
+  features(.innov, ljung_box, lag = 8)
+cat("\nTest de Ljung-Box:\n")
+print(lb_test_ets)
+```
+
+```{r}
+# ARIMA automático
+cat("\n", strrep("=", 60), "\n")
+cat("DIAGNÓSTICO: ARIMA Automático\n")
+cat(strrep("=", 60), "\n\n")
+print(report(gas_fit_mejorado |> select(arima_auto)))
+gas_fit_mejorado |> 
+  select(arima_auto) |>
+  gg_tsresiduals()
+```
+
+```{r}
+lb_test_arima <- gas_fit_mejorado |>
+  select(arima_auto) |>
+  augment() |>
+  features(.innov, ljung_box, lag = 8)
+cat("\nTest de Ljung-Box:\n")
+print(lb_test_arima)
+```
+
+```{r}
+# STL con ARIMA
+cat("\n", strrep("=", 60), "\n")
+cat("DIAGNÓSTICO: STL + ARIMA\n")
+cat(strrep("=", 60), "\n\n")
+gas_fit_mejorado |> 
+  select(stl_arima) |>
+  gg_tsresiduals()
+
+```
+
+```{r}
+lb_test_stl <- gas_fit_mejorado |>
+  select(stl_arima) |>
+  augment() |>
+  features(.innov, ljung_box, lag = 8)
+cat("\nTest de Ljung-Box:\n")
+print(lb_test_stl)
+```
+
+```{r}
+# Generar pronósticos para 3 años (hasta 2008 Q2)
+gas_fc_mejorado <- gas_fit_mejorado |>
+  forecast(h = "5 years")
+
+# Visualizar pronósticos
+aus_prod_recent <- aus_production |>
+  filter_index("1999 Q1" ~ .)
+
+gas_fc_mejorado |>
+  autoplot(aus_prod_recent, level = NULL) +
+  labs(
+    title = "Comparación de Pronósticos - Modelos Mejorados",
+    subtitle = "Producción de Gas en Australia",
+    y = "Gas"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+cat("\n", strrep("=", 60), "\n")
+cat("EVALUACIÓN DE PRECISIÓN EN CONJUNTO DE PRUEBA\n")
+cat(strrep("=", 60), "\n\n")
+
+accuracy_results <- gas_fc_mejorado |>
+  accuracy(aus_production) |>
+  arrange(RMSE)
+
+print(accuracy_results)
+```
+
+```{r}
+mejor_modelo <- accuracy_results$.model[1]
+cat("\n\nMEJOR MODELO:", mejor_modelo, "\n")
+
+gas_fc_mejorado |>
+  filter(.model == mejor_modelo) |>
+  autoplot(aus_prod_recent, level = c(80, 95)) +
+  labs(
+    title = paste("Pronóstico con el Mejor Modelo:", mejor_modelo),
+    subtitle = "Producción de Gas en Australia",
+    y = "Gas"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+top3_models <- accuracy_results$.model[1:3]
+
+gas_fit_ensemble <- gas_train |>
+  model(
+    ets_auto = ETS(box_cox(Gas, gas_lambda)),
+    arima_auto = ARIMA(box_cox(Gas, gas_lambda)),
+    stl_arima = decomposition_model(
+      STL(box_cox(Gas, gas_lambda) ~ season(window = "periodic"), robust = TRUE),
+      ARIMA(season_adjust)
+    )
+  ) |>
+  mutate(
+    combinado = (ets_auto + arima_auto + stl_arima) / 3
+  )
+```
+
+```{r}
+gas_fc_ensemble <- gas_fit_ensemble |>
+  forecast(h = "5 years")
+
+cat("\n\nEVALUACIÓN DEL MODELO COMBINADO (ENSEMBLE):\n")
+cat(strrep("-", 60), "\n")
+
+accuracy_ensemble <- gas_fc_ensemble |>
+  accuracy(aus_production) |>
+  arrange(RMSE)
+
+print(accuracy_ensemble)
+```
+
+```{r}
+gas_fc_ensemble |>
+  filter(.model == "combinado") |>
+  autoplot(aus_prod_recent, level = c(80, 95)) +
+  labs(
+    title = "Pronóstico con Modelo Combinado (Ensemble)",
+    subtitle = "Promedio de ETS + ARIMA + STL-ARIMA",
+    y = "Gas"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+cat("\n", strrep("=", 60), "\n")
+cat("COMPARACIÓN FINAL: MODELOS BÁSICOS VS MEJORADOS\n")
+cat(strrep("=", 60), "\n\n")
+
+comparacion_final <- bind_rows(
+  accuracy_results |> 
+    filter(.model %in% c("drift", "snaive")) |>
+    mutate(tipo = "Básico"),
+  accuracy_results |> 
+    filter(.model %in% c("ets_auto", "arima_auto", "stl_arima")) |>
+    mutate(tipo = "Mejorado"),
+  accuracy_ensemble |>
+    filter(.model == "combinado") |>
+    mutate(tipo = "Ensemble")
+)
+
+print(comparacion_final |> select(tipo, .model, RMSE, MAE, MAPE))
+
+# Gráfico comparativo
+comparacion_final |>
+  ggplot(aes(x = reorder(.model, RMSE), y = RMSE, fill = tipo)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Comparación de Error RMSE por Modelo",
+    x = "Modelo",
+    y = "RMSE",
+    fill = "Tipo"
+  ) +
+  theme_minimal()
+```
+
+## Conclusión
+
+El análisis comparativo mostró que los modelos básicos y ETS tuvieron errores altos, mientras que los modelos ARIMA alcanzaron un desempeño superior. El modelo ARIMA automático con transformación de Box-Cox resultó ser el más preciso, con RMSE = 9.28 y MAPE ≈ 3.6%. Asimismo, la prueba de Ljung-Box confirmó residuales sin autocorrelación significativa y el gráfico acf muestra los residuales dentro del área delimitada por las lineas azules, garantizando la validez del modelo.
